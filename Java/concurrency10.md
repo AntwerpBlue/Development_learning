@@ -66,3 +66,38 @@ public interface ThreadFactory {
     - `CallerRunsPolicy`：由提交任务的线程直接执行该任务。
     - `DiscardPolicy`：静默丢弃任务。
     - `DiscardOldestPolicy`：丢弃队列中最旧的任务，然后重试提交。
+
+#### 线程池的关闭
+
+##### Step 1: 调用 `shutdown()`
+
+- 行为：停止接收新任务，等待已提交任务（包括队列中的任务）执行完毕。
+- 适用场景：需要确保所有任务完成（如数据处理完成后持久化结果）。
+
+##### Step 2: 等待任务完成
+
+- 使用`awaitTermination()`设置超时时间，避免无限阻塞：
+
+
+##### Step 3: 强制关闭(调用 `shutdownNow()`)
+
+- 行为：
+  - 立即停止所有正在执行的任务
+  - 尝试中断正在执行的任务（通过`Thread.interrupt()`）
+  - 返回未执行的任务列表。
+- 任务必须响应中断（任务代码中需要检查 Thread.interrupted()），否则无法终止。
+
+```java
+public void gracefulShutdown(ExecutorService executor, long timeout, TimeUnit unit) {
+    executor.shutdown(); // 1. 拒绝新任务
+    try {
+        if (!executor.awaitTermination(timeout, unit)) { // 2. 等待现有任务完成
+            List<Runnable> dropped = executor.shutdownNow(); // 3. 强制终止
+            log.warn("因超时中断，丢弃任务: " + dropped.size());
+        }
+    } catch (InterruptedException e) {
+        executor.shutdownNow(); // 4. 线程被中断时强制关闭
+        Thread.currentThread().interrupt();
+    }
+}
+```

@@ -160,3 +160,79 @@ public class Main {
 - 与监控系统不兼容
 
     自动化创建的线程池难以集成监控（如线程活跃数、队列大小、任务耗时）。
+
+#### 自定义线程池
+
+##### 线程数
+
+- CPU 密集型任务
+  - 特点：任务主要消耗 CPU 资源（如数学计算、数据压缩、加密解密）。
+  - 线程数：`线程数 = CPU 核心数 + 1`
+（多 1 个线程避免 CPU 空闲，但实际场景中通常直接等于核心数即可）。
+  - 最多线程数：`maxPoolSize = corePoolSize`（通常不扩展）
+  - 过多的线程会导致频繁的上下文切换，反而降低性能。
+- I/O 密集型任务
+  - 特点：任务频繁等待 I/O（如网络请求、数据库查询、文件读写）。
+  - 线程数：`线程数 = CPU 核心数 * (1 + 平均等待时间 / 平均工作时间)`
+    - 若等待时间远高于计算时间（如 HTTP 请求），可简化为：`线程数 = CPU 核心数 * 2`
+    - 极端情况下（如完全阻塞的任务），可适当调高（如 50~100），但需压测验证。
+  - 最多线程数：`maxPoolSize = corePoolSize * 2`
+  - 在 I/O 等待时，CPU 可以处理其他线程的任务，提高资源利用率。
+
+##### 任务队列选择
+
+| 队列类型 | 特点 | 适用场景 |
+| --- | --- | --- |
+| `ArrayBlockingQueue` | 有界队列，固定容量，防止OOM | 适用于任务量已知，需要限制任务数 |
+| `LinkedBlockingQueue` | 无界队列（默认`Integer.MAX_VALUE`），可能堆积任务导致OOM | 不推荐生产环境使用 |
+| `SynchronousQueue` | 不存储任务，直接移交线程 | 高吞吐、短任务 |
+| `PriorityBlockingQueue` | 优先级队列 | 需要任务优先级调度 |
+
+##### 拒绝策略
+
+| 策略 | 行为 | 适用场景 |
+| --- | --- | --- |
+| `AbortPolicy` | 抛出异常 | 默认策略，需要快速失败 |
+| `CallerRunsPolicy` | 调用者执行任务 | 保证任务不丢失，但可能阻塞主线程 |
+| `DiscardPolicy` | 静默丢弃新任务 | 允许丢弃不重要任务 |
+| `DiscardOldestPolicy` | 丢弃队列最旧任务，然后重试提交 | 优先处理新任务 |
+
+##### 线程工厂
+
+自定义线程属性（名称、优先级、守护线程等）：
+```java
+ThreadFactory factory = r -> {
+    Thread t = new Thread(r, "service-thread-" + atomicCounter.getAndIncrement());
+    t.setPriority(Thread.NORM_PRIORITY);
+    t.setDaemon(false); // 非守护线程（避免JVM退出时线程被强制终止）
+    return t;
+};
+```
+
+**守护线程（Daemon Thread）** 是 Java 中的一种后台服务线程，它的生命周期依赖于非守护线程（即用户线程）。当所有非守护线程结束时，无论守护线程是否执行完毕，JVM 都会立即退出并终止所有守护线程。守护线程的优先级通常较低，并且不保证finally块中的代码一定会被执行，因此需要避免在守护线程中持有需要释放的资源。
+
+
+##### 扩展功能（钩子方法）
+
+通过继承`ThreadPoolExecutor`添加监控和增强逻辑：
+```java
+class CustomThreadPool extends ThreadPoolExecutor {
+    @Override
+    protected void beforeExecute(Thread t, Runnable r) {
+        super.beforeExecute(t, r);
+        monitor.recordStart(t, r); // 记录任务开始时间
+    }
+
+    @Override
+    protected void afterExecute(Runnable r, Throwable t) {
+        super.afterExecute(r, t);
+        monitor.recordEnd(r, t); // 记录任务耗时和异常
+    }
+
+    @Override
+    protected void terminated() {
+        super.terminated();
+        log.info("ThreadPool terminated"); // 线程池关闭时通知
+    }
+}
+```
