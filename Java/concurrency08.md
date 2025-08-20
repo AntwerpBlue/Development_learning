@@ -1,182 +1,238 @@
-## Java 并发编程
+# Java 并发编程
 
-### Lecture 8: 三类线程安全问题
+## Lecture 8: 常见线程池
 
-线程安全问题主要分为三类：原子性问题（Atomicity）、可见性问题（Visibility）、有序性问题（Ordering）。
+在 Java 中，通过 `java.util.concurrent.Executors` 工具类可以快速创建 6 种常见的线程池，每种线程池适用于不同的业务场景
 
-#### 原子性问题
+### FixedThreadPool（固定大小线程池）
 
-原子性问题是由于复合操作的非原子执行导致的数据不一致。表现包括：
-- 竞态条件：多个线程同时访问共享资源，导致数据不一致。
-- 读-改-写操作的非原子性（如i++）
-- 检查后执行的非原子性
-
-解决方案：
-- 使用synchronized关键字，将复合操作封装在同步块中，确保操作的原子性。
-- 使用原子类（如AtomicInteger、AtomicBoolean等），它们提供了原子操作的方法，可以避免复合操作的线程安全问题。
-- 使用Lock类（如ReentrantLock、ReadWriteLock等），它们提供了更灵活的锁机制，可以确保操作的原子性。
-
-#### 可见性问题
-
-可见性问题是指一个线程对共享变量的修改，其他线程无法立即看到。根本原因包括：
-- CPU多级缓存架构：每个CPU都有自己的缓存，线程对共享变量的修改可能只发生在自己的缓存中，而其他线程无法立即看到。
-- 指令重排序优化：编译器和CPU可能会对指令进行重排序
-- JIT编译器优化：JIT编译器可能会对代码进行优化，导致变量的修改无法立即反映在内存中。
-
-解决方案：
-- 使用volatile关键字
-- 使用synchronized关键字
-- 使用final字段（安全发布）
-- 使用原子类
-
-#### 有序性问题
-
-有序性问题是指代码执行顺序与预期不符。主要原因包括编译器指令重排序、CPU指令级并行优化、内存系统的重排序
-
-解决方案：
-- 使用volatile关键字（禁止指令重排）
-- 使用synchronized关键字（建立happens-before关系）
-- 使用静态内部类（利用类加载机制）
-
-#### 需要注意线程安全问题的场景
-
-1. 共享数据访问
-
-例如，非原子操作导致计数不准
 ```java
-private int count = 0;
-public void increment() {
-    count++; // 非原子操作
-}
-```
-解决：使用原子类
-```java
-private final AtomicInteger count = new AtomicInteger(0);
-public void increment() {
-    count.incrementAndGet();
-}
+ExecutorService executor = Executors.newFixedThreadPool(int nThreads);
 ```
 
-2. 状态依赖
+特点：
 
-- 检查后执行（Check-then-act）竞态条件
+- 固定线程数量（`corePoolSize = maximumPoolSize = nThreads`）
+- 使用无界队列 `LinkedBlockingQueue`，任务可能无限堆积，需警惕 OOM（OutOfMemoryError）。
+
+适用场景：适合负载稳定且需要限制线程数的场景（如 HTTP 请求处理）。
+
+### CachedThreadPool（可缓存线程池）
+
 ```java
-private ExpensiveObject instance;
-public ExpensiveObject getInstance() {
-    if (instance == null) {          // 检查
-        instance = new ExpensiveObject(); // 执行
+ExecutorService executor = Executors.newCachedThreadPool();
+```
+
+特点：
+
+- 线程数弹性伸缩（`corePoolSize=0`，`maximumPoolSize=Integer.MAX_VALUE`）。
+- 使用 `SynchronousQueue`，任务会立即执行，若没有空闲线程则创建新线程
+- 空闲线程超时回收（默认 60 秒）。
+
+适用场景：适合**短时异步任务**且任务量波动大的场景（如突发流量）。
+
+### SingleThreadExecutor（单线程池）
+
+```java
+ExecutorService executor = Executors.newSingleThreadExecutor();
+```
+
+特点：
+
+- 仅 1 个核心线程（`corePoolSize = maximumPoolSize = 1`）。
+- 使用无界队列 `LinkedBlockingQueue`。
+- 保证任务顺序执行（FIFO）。
+
+适用场景：需要**任务串行执行**的场景（如日志顺序写入、单任务调度）。
+
+### ScheduledThreadPool（定时任务线程池）/ SingleThreadScheduledExecutor（单线程定时任务池）
+
+```java
+ExecutorService executor = Executors.newScheduledThreadPool(int corePoolSize);
+ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+```
+
+特点：
+
+- 支持 定时/周期性任务（如 scheduleAtFixedRate）。
+- 使用 `DelayedWorkQueue`，任务会按延迟时间排序执行。
+
+适用场景：定时任务（如心跳检测）、周期性任务（如数据定时同步）。
+
+### WorkStealingPool（工作窃取线程池）
+
+```java
+ExecutorService executor = Executors.newWorkStealingPool(int parallelism);
+```
+
+特点：
+    - 使用 `ForkJoinPool` 实现，支持**工作窃取算法**（空闲线程偷其他队列任务）
+    - 默认并行度为 `Runtime.getRuntime().availableProcessors()`。
+
+适用场景：计算密集型任务（如并行流处理、分治算法），能够提高 CPU 利用率，减少线程竞争。
+
+|线程池类型|核心线程数|最大线程数|任务队列|适用场景|
+|---|---|---|---|---|
+|FixedThreadPool|固定 (nThreads)|固定 (nThreads)|LinkedBlockingQueue|稳定负载，限制线程数|
+|CachedThreadPool|0|Integer.MAX_VALUE|SynchronousQueue|短时任务，突发流量|
+|SingleThreadExecutor|1|1|LinkedBlockingQueue|单线程顺序执行|
+|ScheduledThreadPool|自定义|Integer.MAX_VALUE|DelayedWorkQueue|定时/周期性任务|
+|SingleThreadScheduledExecutor|1|1|DelayedWorkQueue|单线程定时任务|
+|WorkStealingPool|并行度 (CPU核数)|无上限|工作窃取队列|计算密集型任务（Java 8+）|
+
+### ForkJoinPool（工作窃取线程池）
+
+`ForkJoinPool`是一种专为分治任务设计的线程池，基于工作窃取算法实现高效并行计算，适合处理递归分解的可并行任务（如大规模数据处理、递归算法等）。
+
+### 工作窃取算法
+
+- 每个线程维护一个双端队列，优先处理自己队列中的任务
+- 当某个线程的队列为空时，会从其他线程队列的尾部偷取任务执行（减少竞争）
+- 优势：最大化 CPU 利用率，避免线程闲置。
+
+#### 分治任务
+
+- fork()：将任务分解为子任务，并提交给线程池
+- join()：等待子任务完成并获取结果
+
+#### 示例
+
+计算1~n的和
+
+```java
+import java.util.concurrent.*;
+
+class SumTask extends RecursiveTask<Long> {
+    private final long start;
+    private final long end;
+    private static final long THRESHOLD = 10_000; // 阈值：小于此值直接计算
+
+    SumTask(long start, long end) {
+        this.start = start;
+        this.end = end;
     }
-    return instance;
-}
-```
-解决：双重检查锁定（Double-checked-lock）+volatile
-```java
-private volatile ExpensiveObject instance;
-public ExpensiveObject getInstance() {
-    ExpensiveObject result = instance;
-    if (result == null) { // 第一次检查
-        synchronized (this) {
-            result = instance;
-            if (result == null) { // 第二次检查
-                instance = result = new ExpensiveObject();
-            }
+
+    @Override
+    protected Long compute() {
+        if (end - start <= THRESHOLD) {
+            // 小任务直接计算
+            long sum = 0;
+            for (long i = start; i <= end; i++) sum += i;
+            return sum;
+        } else {
+            // 大任务拆分（分治）
+            long mid = (start + end) / 2;
+            SumTask leftTask = new SumTask(start, mid);
+            SumTask rightTask = new SumTask(mid + 1, end);
+            leftTask.fork(); // 异步执行左子任务
+            return rightTask.compute() + leftTask.join(); // 合并结果
         }
     }
-    return result;
 }
-```
-使用局部变量result而不直接使用instance进行判断，减少对volatile变量的访问次数，提高性能（volatile变量需要保证内存可见性，防止指令重排，因此访问速度较慢），并减少线程间的竞争。
 
-第一次检查避免不必要的同步，如果实例已经存在，那么就无需进入同步代码块，直接返回实例；第二次检查防止多个线程同时通过第一次检查后，重复创建实例，确保只有一个线程能创建实例。
-
-- 状态标志控制
-
-由于可见性问题导致无限循环
-```java
-private boolean running = true; // 非volatile
-
-public void stop() { running = false; }
-
-public void run() {
-    while (running) { /* 工作 */ } // 可能看不到修改
-}
-```
-解决：使用volatile或原子类
-```java
-private volatile boolean running = true;
-// 或
-private final AtomicBoolean running = new AtomicBoolean(true);
-```
-3. 集合操作
-
-共享的集合访问或操作可能导致问题
-
-- 问题：并发修改异常
-```java
-List<String> list = new ArrayList<>();
-// 线程A
-list.add("item");
-// 线程B
-for (String s : list) { ... } // 可能抛出ConcurrentModificationException
-```
-解决：使用并发集合
-```java
-List<String> list = new CopyOnWriteArrayList<>(); // 或
-Map<String, String> map = new ConcurrentHashMap<>();
-```
-
-- 问题：非原子复合操作
-```java
-if (!map.containsKey(key)) {
-    map.put(key, value); // 仍然可能产生竞态条件
-}
-```
-解决：使用原子类
-```java
-map.putIfAbsent(key, value); // ConcurrentHashMap的方法
-```
-
-4. 资源管理
-
-- 缓存击穿时重复初始化
-```java
-private Map<K,V> cache = new HashMap<>();
-
-public V get(K key) {
-    V value = cache.get(key);
-    if (value == null) {
-        value = computeValue(key); // 昂贵计算
-        cache.put(key, value);     // 可能被多次执行
+public class Main {
+    public static void main(String[] args) {
+        ForkJoinPool pool = ForkJoinPool.commonPool();
+        SumTask task = new SumTask(1, 1_000_000);
+        long result = pool.invoke(task); // 提交任务并获取结果
+        System.out.println("Sum: " + result); // 输出 500000500000
     }
-    return value;
-}
-```
-解决：使用ConcurrentHashMap
-```java
-private final ConcurrentMap<K,V> cache = new ConcurrentHashMap<>();
-
-public V get(K key) {
-    return cache.computeIfAbsent(key, this::computeValue);
 }
 ```
 
-- 连接池/对象池资源重复分配或泄露
-```java
-private List<Connection> pool = new ArrayList<>();
+### 为什么不应该自动创建线程池
 
-public Connection getConnection() {
-    if (pool.isEmpty()) {          // 检查
-        return createConnection();  // 执行
+虽然通过 Executors 工具类可以快速创建线程池（如 newFixedThreadPool、newCachedThreadPool），但阿里 Java 开发规范等最佳实践明确建议 不要直接使用这些便捷方法，而是应该 手动创建 ThreadPoolExecutor。以下是具体原因和底层逻辑：
+
+- 无界队列导致内存溢出（OOM）
+  
+  FixedThreadPool 和 SingleThreadExecutor 默认使用 无界队列，当任务提交速度持续高于处理速度时，队列会无限堆积任务。
+
+- 线程数失控引发资源耗尽
+
+  CachedThreadPool 和 ScheduledThreadPool 默认使用 SynchronousQueue，当任务数量暴增时，会无限创建线程，导致系统资源（CPU、内存）耗尽。
+
+- 无法感知任务执行异常
+
+  Executors 创建的线程池默认不捕获任务抛出的异常，异常信息会丢失。
+
+- 与监控系统不兼容
+
+    自动化创建的线程池难以集成监控（如线程活跃数、队列大小、任务耗时）。
+
+### 自定义线程池
+
+#### 线程数
+
+- CPU 密集型任务
+  - 特点：任务主要消耗 CPU 资源（如数学计算、数据压缩、加密解密）。
+  - 线程数：`线程数 = CPU 核心数 + 1`
+（多 1 个线程避免 CPU 空闲，但实际场景中通常直接等于核心数即可）。
+  - 最多线程数：`maxPoolSize = corePoolSize`（通常不扩展）
+  - 过多的线程会导致频繁的上下文切换，反而降低性能。
+- I/O 密集型任务
+  - 特点：任务频繁等待 I/O（如网络请求、数据库查询、文件读写）。
+  - 线程数：`线程数 = CPU 核心数 * (1 + 平均等待时间 / 平均工作时间)`
+    - 若等待时间远高于计算时间（如 HTTP 请求），可简化为：`线程数 = CPU 核心数 * 2`
+    - 极端情况下（如完全阻塞的任务），可适当调高（如 50~100），但需压测验证。
+  - 最多线程数：`maxPoolSize = corePoolSize * 2`
+  - 在 I/O 等待时，CPU 可以处理其他线程的任务，提高资源利用率。
+
+#### 任务队列选择
+
+| 队列类型 | 特点 | 适用场景 |
+| --- | --- | --- |
+| `ArrayBlockingQueue` | 有界队列，固定容量，防止OOM | 适用于任务量已知，需要限制任务数 |
+| `LinkedBlockingQueue` | 无界队列（默认`Integer.MAX_VALUE`），可能堆积任务导致OOM | 不推荐生产环境使用 |
+| `SynchronousQueue` | 不存储任务，直接移交线程 | 高吞吐、短任务 |
+| `PriorityBlockingQueue` | 优先级队列 | 需要任务优先级调度 |
+
+#### 拒绝策略
+
+| 策略 | 行为 | 适用场景 |
+| --- | --- | --- |
+| `AbortPolicy` | 抛出异常 | 默认策略，需要快速失败 |
+| `CallerRunsPolicy` | 调用者执行任务 | 保证任务不丢失，但可能阻塞主线程 |
+| `DiscardPolicy` | 静默丢弃新任务 | 允许丢弃不重要任务 |
+| `DiscardOldestPolicy` | 丢弃队列最旧任务，然后重试提交 | 优先处理新任务 |
+
+#### 线程工厂
+
+自定义线程属性（名称、优先级、守护线程等）：
+
+```java
+ThreadFactory factory = r -> {
+    Thread t = new Thread(r, "service-thread-" + atomicCounter.getAndIncrement());
+    t.setPriority(Thread.NORM_PRIORITY);
+    t.setDaemon(false); // 非守护线程（避免JVM退出时线程被强制终止）
+    return t;
+};
+```
+
+**守护线程（Daemon Thread）** 是 Java 中的一种后台服务线程，它的生命周期依赖于非守护线程（即用户线程）。当所有非守护线程结束时，无论守护线程是否执行完毕，JVM 都会立即退出并终止所有守护线程。守护线程的优先级通常较低，并且不保证finally块中的代码一定会被执行，因此需要避免在守护线程中持有需要释放的资源。
+
+#### 扩展功能（钩子方法）
+
+通过继承`ThreadPoolExecutor`添加监控和增强逻辑：
+
+```java
+class CustomThreadPool extends ThreadPoolExecutor {
+    @Override
+    protected void beforeExecute(Thread t, Runnable r) {
+        super.beforeExecute(t, r);
+        monitor.recordStart(t, r); // 记录任务开始时间
     }
-    return pool.remove(0);         // 可能抛出异常
-}
-```
-解决：使用同步控制
-```java
-private final BlockingQueue<Connection> pool = new LinkedBlockingQueue<>();
 
-public Connection getConnection() throws InterruptedException {
-    Connection conn = pool.poll();
-    return conn != null ? conn : createConnection();
+    @Override
+    protected void afterExecute(Runnable r, Throwable t) {
+        super.afterExecute(r, t);
+        monitor.recordEnd(r, t); // 记录任务耗时和异常
+    }
+
+    @Override
+    protected void terminated() {
+        super.terminated();
+        log.info("ThreadPool terminated"); // 线程池关闭时通知
+    }
 }
 ```

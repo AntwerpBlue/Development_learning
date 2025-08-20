@@ -1,105 +1,210 @@
-## Java 并发编程
+# Java 并发编程
 
-### Lecture 5: 原子操作
+## Lecture 5: 三类线程安全问题
 
-原子操作是指不可分割的操作，在执行过程中不会被线程调度机制中断，要么完全执行成功，要么完全不执行，没有中间状态。
+线程安全问题主要分为三类：原子性问题（Atomicity）、可见性问题（Visibility）、有序性问题（Ordering）。
 
-在Java中，基本数据类型（除long/double）、引用类型与volatile变量（包括long/double）的读写操作是原子的。Java还提供了`java.util.concurrent.atomic`包来实现更复杂的原子操作
+### 原子性问题
+
+原子性问题是由于复合操作的非原子执行导致的数据不一致。表现包括：
+
+- 竞态条件：多个线程同时访问共享资源，导致数据不一致。
+- 读-改-写操作的非原子性（如i++）
+- 检查后执行的非原子性
+
+解决方案：
+
+- 使用synchronized关键字，将复合操作封装在同步块中，确保操作的原子性。
+- 使用原子类（如AtomicInteger、AtomicBoolean等），它们提供了原子操作的方法，可以避免复合操作的线程安全问题。
+- 使用Lock类（如ReentrantLock、ReadWriteLock等），它们提供了更灵活的锁机制，可以确保操作的原子性。
+
+### 可见性问题
+
+可见性问题是指一个线程对共享变量的修改，其他线程无法立即看到。根本原因包括：
+
+- CPU多级缓存架构：每个CPU都有自己的缓存，线程对共享变量的修改可能只发生在自己的缓存中，而其他线程无法立即看到。
+- 指令重排序优化：编译器和CPU可能会对指令进行重排序
+- JIT编译器优化：JIT编译器可能会对代码进行优化，导致变量的修改无法立即反映在内存中。
+
+解决方案：
+
+- 使用volatile关键字
+- 使用synchronized关键字
+- 使用final字段（安全发布）
+- 使用原子类
+
+### 有序性问题
+
+有序性问题是指代码执行顺序与预期不符。主要原因包括编译器指令重排序、CPU指令级并行优化、内存系统的重排序
+
+解决方案：
+
+- 使用volatile关键字（禁止指令重排）
+- 使用synchronized关键字（建立happens-before关系）
+- 使用静态内部类（利用类加载机制）
+
+### 需要注意线程安全问题的场景
+
+#### 共享数据访问
+
+例如，非原子操作导致计数不准
+
 ```java
-AtomicInteger atomicInt = new AtomicInteger(0);
-
-// 原子递增
-atomicInt.incrementAndGet(); 
-
-// CAS操作
-atomicInt.compareAndSet(expect, update);
-```
-
-#### 原子类
-
-原子类通过CAS操作来实现线程安全。Java原子类使用`Unsafe`类，提供底层硬件级别的原子操作，能够直接操作内存。例如在`AtomicInteger`中
-```java
-public class AtomicInteger {
-    private volatile int value;
-    private static final long valueOffset;
-    
-    static {
-        try {
-            valueOffset = Unsafe.objectFieldOffset
-                (AtomicInteger.class.getDeclaredField("value"));
-        } catch (Exception ex) { throw new Error(ex); }
-    }
-    
-    public final boolean compareAndSet(int expect, int update) {
-        return unsafe.compareAndSwapInt(this, valueOffset, expect, update);
-    }
-    
-    public final int incrementAndGet() {
-        return unsafe.getAndAddInt(this, valueOffset, 1) + 1;
-    }
+private int count = 0;
+public void increment() {
+    count++; // 非原子操作
 }
 ```
-value以volatile修饰以确保线程可见性，valueOffset代表value在内存中的位置。以`getAndAddInt`为例:
+
+解决：使用原子类
+
 ```java
-public final int getAndAddInt(Object o, long offset, int delta) {
-    int v;
-    do {
-        v = getIntVolatile(o, offset);  // 读取当前值
-    } while (!compareAndSwapInt(o, offset, v, v + delta)); // CAS尝试更新
-    return v;
+private final AtomicInteger count = new AtomicInteger(0);
+public void increment() {
+    count.incrementAndGet();
 }
 ```
-通过循环CAS实现"读取-修改-写入"的原子性
 
-#### volatile关键字
+#### 状态依赖
 
-在多线程环境下，一个线程对共享变量的修改，其他线程可能无法立即看到，这种现象称为可见性问题。这是由于：
-- CPU缓存架构：现代CPU有多级缓存，线程可能读取的是缓存中的旧值
-- 指令重排序：编译器和处理器可能优化指令执行顺序
+- 检查后执行（Check-then-act）竞态条件
 
-当一个变量被声明为`volatile`时，对该变量的修改会立刻刷新到主存；每次读取该变量也会直接从主存获取新值，从而确保可见性。
+```java
+private ExpensiveObject instance;
+public ExpensiveObject getInstance() {
+    if (instance == null) {          // 检查
+        instance = new ExpensiveObject(); // 执行
+    }
+    return instance;
+}
+```
 
-在JVM中，通过插入内存屏障指令实现`volatile`的语义
-- 写屏障（Store Barrier）：确保 volatile 写操作前的所有普通写操作都刷新到主内存
-- 读屏障（Load Barrier）：确保 volatile 读操作后的所有普通读操作都从主内存读取
+解决：双重检查锁定（Double-checked-lock）+volatile
 
-同时`volatile`变量遵循happens-before规则，即对一个`volatile`变量的写操作，happens-before于后续对这个变量的读操作
+```java
+private volatile ExpensiveObject instance;
+public ExpensiveObject getInstance() {
+    ExpensiveObject result = instance;
+    if (result == null) { // 第一次检查
+        synchronized (this) {
+            result = instance;
+            if (result == null) { // 第二次检查
+                instance = result = new ExpensiveObject();
+            }
+        }
+    }
+    return result;
+}
+```
 
-#### 原子类在高并发下的性能降低
+使用局部变量result而不直接使用instance进行判断，减少对volatile变量的访问次数，提高性能（volatile变量需要保证内存可见性，防止指令重排，因此访问速度较慢），并减少线程间的竞争。
 
-在高并发环境下，原子类性能不佳基于以下原因：
-- CAS自旋开销：在高并发情况下，大量线程同时执行CAS操作，导致大量自旋，浪费CPU资源
-- 伪共享问题：当多个原子变量位于同一个缓存行中时，一个线程对其中一个变量的修改会导致整个缓存行失效，其他线程访问该缓存行中的其他变量时需要重新从主存加载，即便它们操作的是不同的变量
+第一次检查避免不必要的同步，如果实例已经存在，那么就无需进入同步代码块，直接返回实例；第二次检查防止多个线程同时通过第一次检查后，重复创建实例，确保只有一个线程能创建实例。
 
-为了解决高并发下的性能问题，主要途径包括：
-- 降低并发竞争：分散竞争点、批处理减少CAS次数
-- 消除伪共享：使用缓存行填充、使用`@Contended`注解
-- 内置优化策略：如`LongAdder`代替`AtomicLong`、分段锁
+- 状态标志控制
 
-#### 原子类、volatile和happens-before的关系
+由于可见性问题导致无限循环
 
-#### volatile与原子类的比较
+```java
+private boolean running = true; // 非volatile
 
-`volatile`和原子类都可以保证可见性，并禁止指令重排
+public void stop() { running = false; }
 
-|特性|volatile|原子类|
-|---|---|---|
-|原子性保证|仅保证单次读/写的原子性|保证复合操作(如i++)的原子性|
-|性能开销|较低|略高(CAS操作需要重试)|
-|适用操作|简单状态标志|计数器等需要原子更新的场景|
+public void run() {
+    while (running) { /* 工作 */ } // 可能看不到修改
+}
+```
 
-因此在只需要保证单变量读写的可见性，变量不参与复合运算时，`volatile`是更好的选择；而在需要原子性的读-改-写操作时，原子类更为合适
+解决：使用volatile或原子类
 
-#### 原子类与synchronized的比较
+```java
+private volatile boolean running = true;
+// 或
+private final AtomicBoolean running = new AtomicBoolean(true);
+```
 
-原子类与`synchronized`都可以保证可见性和原子性
+#### 集合操作
 
-|特性|原子类|synchronized|
-|---|---|---|
-|实现机制|基于JVM内置锁(Monitor)|基于CAS(Compare-And-Swap) CPU指令|
-|阻塞行为|获取不到锁时会阻塞线程|采用自旋(忙等待)，不阻塞线程|
-|锁粒度|方法/代码块级别|单个变量级别|
-|性能特征|高竞争下表现更好|低竞争下性能更优|
-|功能特性|支持等待/通知机制(wait/notify)|仅提供原子更新功能|
+共享的集合访问或操作可能导致问题
 
-在操作非常简单（如计数器递增），竞争程度低，只需要保护单个变量时有限选择原子类；而在需要保护复杂逻辑或多变量操作的高竞争环境下，选择`synchronized`更为合适
+- 问题：并发修改异常
+
+```java
+List<String> list = new ArrayList<>();
+// 线程A
+list.add("item");
+// 线程B
+for (String s : list) { ... } // 可能抛出ConcurrentModificationException
+```
+
+解决：使用并发集合
+
+```java
+List<String> list = new CopyOnWriteArrayList<>(); // 或
+Map<String, String> map = new ConcurrentHashMap<>();
+```
+
+- 问题：非原子复合操作
+
+```java
+if (!map.containsKey(key)) {
+    map.put(key, value); // 仍然可能产生竞态条件
+}
+```
+
+解决：使用原子类
+
+```java
+map.putIfAbsent(key, value); // ConcurrentHashMap的方法
+```
+
+#### 资源管理
+
+- 缓存击穿时重复初始化
+
+```java
+private Map<K,V> cache = new HashMap<>();
+
+public V get(K key) {
+    V value = cache.get(key);
+    if (value == null) {
+        value = computeValue(key); // 昂贵计算
+        cache.put(key, value);     // 可能被多次执行
+    }
+    return value;
+}
+```
+
+解决：使用ConcurrentHashMap
+
+```java
+private final ConcurrentMap<K,V> cache = new ConcurrentHashMap<>();
+
+public V get(K key) {
+    return cache.computeIfAbsent(key, this::computeValue);
+}
+```
+
+- 连接池/对象池资源重复分配或泄露
+
+```java
+private List<Connection> pool = new ArrayList<>();
+
+public Connection getConnection() {
+    if (pool.isEmpty()) {          // 检查
+        return createConnection();  // 执行
+    }
+    return pool.remove(0);         // 可能抛出异常
+}
+```
+
+解决：使用同步控制
+
+```java
+private final BlockingQueue<Connection> pool = new LinkedBlockingQueue<>();
+
+public Connection getConnection() throws InterruptedException {
+    Connection conn = pool.poll();
+    return conn != null ? conn : createConnection();
+}
+```

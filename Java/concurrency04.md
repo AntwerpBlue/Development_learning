@@ -1,39 +1,104 @@
-## Java 并发编程
+# Java 并发编程
 
-### Lecture 4: 锁升级
+## Lecture 4: 生产者-消费者模式
 
-Java中的锁有四种状态，按照升级顺序，分别在Mark Word中的布局为：
-|锁状态|Mark Word(64 bits)|说明|
-|---|---|---|
-|无锁|`unused:25` \| `identity_hashcode:31` \| `unused:1` \| `age:4` \| `biased_lock:1` \| `lock:2`|存储哈希码、分代年龄等|
-|偏向锁|`thread:54` \| `epoch:2` \| `unused:1` \| `age:4` \| `biased_lock:1` \| `lock:2`|存储持有偏向锁的线程 ID|
-|轻量级锁|`ptr_to_lock_record:62` \| `lock:2`|指向栈中锁记录的指针|
-|重量级锁|`ptr_to_heavyweight_monitor:62` \| `lock:2`|指向 Monitor的指针|
+### wait()/notify() 实现
 
-#### 升级流程
+基础API，无需额外依赖；但需要手动处理同步和唤醒逻辑
 
-- 初始状态：无锁
-  - 对象刚被创建，没有任何线程访问
-- 第一阶段：偏向锁
-  - 第一个线程访问同步代码块，JVM启动偏向锁（默认在应用启动后几秒才激活）
-  - 检查对象头中线程ID是否指向当前线程，是则进入同步块；否则尝试通过CAS操作替换线程ID：
-    - 如果成功则获得偏向锁
-    - 否则说明存在竞争，撤销偏向锁，升级为轻量级锁
-- 第二阶段：轻量级锁
-  - 偏向锁被撤销（第二个线程尝试获取锁）且线程竞争不激烈时，升级为轻量级锁
-  - JVM在线程栈帧中创建锁记录（Lock Record），并将对象头中的Mark Word复制到锁记录中，然后CAS操作将对象头中的Mark Word替换为指向锁记录的指针：
-    - 如果成功则获得轻量级锁
-    - 否则锁重入或说明存在竞争，升级为重量级锁
-- 第三阶段：重量级锁
-  - 轻量级锁被撤销，自旋次数达到阈值后，升级为重量级锁
-  - JVM创建一个Monitor对象，并将对象头中的Mark Word替换为指向Monitor对象的指针，竞争失败的线程进入Monitor的EntryList中等待
-  - 使用操作系统的互斥量（mutex）来实现锁，线程的阻塞和解锁操作需要从用户态切换到内核态，开销较大
+```java
+public class WaitNotifyExample {
+    private final Queue<Integer> queue = new LinkedList<>();
+    private final int MAX_SIZE = 10;
+    private final Object lock = new Object();
 
-#### 偏向锁的延迟启动
+    // 生产者
+    public void produce(int item) throws InterruptedException {
+        synchronized (lock) {
+            while (queue.size() == MAX_SIZE) {
+                lock.wait();
+            }
+            queue.offer(item);
+            lock.notifyAll();
+        }
+    }
 
-在 JVM 启动阶段，虽然存在并发操作（如类加载、JIT 编译、GC 线程活动等），但这些操作不会因偏向锁延迟而导致冲突。
+    // 消费者
+    public int consume() throws InterruptedException {
+        synchronized (lock) {
+            while (queue.isEmpty()) {
+                lock.wait();
+            }
+            int item = queue.poll();
+            lock.notifyAll();
+            return item;
+        }
+    }
+}
+```
 
-在延迟期内，所有对象的锁直接进入轻量级锁状态，避免偏向锁的撤销开销。JVM内部的关键系统对象（如类元数据、符号表）的同步不依赖 Java 层的 synchronized，而是使用：
-- 底层原生锁（如 `pthread_mutex_t`）：由 JVM 的 C++ 代码直接管理
-- 原子操作（CAS）：保证基础操作的线程安全
-- 安全点（Safepoint）同步：在全局停顿阶段执行敏感操作
+### BlockingQueue 实现
+
+简单可靠，保证线程安全；但功能较固定
+
+```java
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+
+public class BlockingQueueExample {
+    private final BlockingQueue<Integer> queue = new LinkedBlockingQueue<>(10);
+
+    // 生产者
+    public void produce(int item) throws InterruptedException {
+        queue.put(item); // 自动阻塞
+    }
+
+    // 消费者
+    public int consume() throws InterruptedException {
+        return queue.take(); // 自动阻塞
+    }
+}
+```
+
+### Lock+Condition 实现
+
+更灵活，多条件支持；但代码稍复杂。多用于实现定制的逻辑
+
+```java
+import java.util.concurrent.locks.*;
+
+public class LockConditionExample {
+    private final Queue<Integer> queue = new LinkedList<>();
+    private final int MAX_SIZE = 10;
+    private final Lock lock = new ReentrantLock();
+    private final Condition notFull = lock.newCondition();
+    private final Condition notEmpty = lock.newCondition();
+
+    public void produce(int item) throws InterruptedException {
+        lock.lock();
+        try {
+            while (queue.size() == MAX_SIZE) {
+                notFull.await();
+            }
+            queue.offer(item);
+            notEmpty.signal();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    public int consume() throws InterruptedException {
+        lock.lock();
+        try {
+            while (queue.isEmpty()) {
+                notEmpty.await();
+            }
+            int item = queue.poll();
+            notFull.signal();
+            return item;
+        } finally {
+            lock.unlock();
+        }
+    }
+}
+```

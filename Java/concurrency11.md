@@ -1,238 +1,141 @@
-## Java 并发编程
+# Java 并发编程
 
-### Lecture 11: 常见线程池
+## Lecture 11: Lock类显式锁
 
-在 Java 中，通过 `java.util.concurrent.Executors` 工具类可以快速创建 6 种常见的线程池，每种线程池适用于不同的业务场景
+Lock是`java.util.concurrent.locks`中提供的显式锁机制，用于替代传统的`synchronized`关键字，提供更灵活、更强大的线程同步功能。它的核心实现类是`ReentrantLock`，此外还有`ReadWriteLock`（读写锁）等。
 
-#### FixedThreadPool（固定大小线程池）
-
+### 基本使用
+  
 ```java
-ExecutorService executor = Executors.newFixedThreadPool(int nThreads);
-```
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
-特点：
-
-- 固定线程数量（`corePoolSize = maximumPoolSize = nThreads`）
-- 使用无界队列 `LinkedBlockingQueue`，任务可能无限堆积，需警惕 OOM（OutOfMemoryError）。
-
-适用场景：适合负载稳定且需要限制线程数的场景（如 HTTP 请求处理）。
-
-#### CachedThreadPool（可缓存线程池）
-
-```java
-ExecutorService executor = Executors.newCachedThreadPool();
-```
-
-特点：
-
-- 线程数弹性伸缩（`corePoolSize=0`，`maximumPoolSize=Integer.MAX_VALUE`）。
-- 使用 `SynchronousQueue`，任务会立即执行，若没有空闲线程则创建新线程
-- 空闲线程超时回收（默认 60 秒）。
-
-适用场景：适合**短时异步任务**且任务量波动大的场景（如突发流量）。
-
-#### SingleThreadExecutor（单线程池）
-
-```java
-ExecutorService executor = Executors.newSingleThreadExecutor();
-```
-
-特点：
-
-- 仅 1 个核心线程（`corePoolSize = maximumPoolSize = 1`）。
-- 使用无界队列 `LinkedBlockingQueue`。
-- 保证任务顺序执行（FIFO）。
-
-适用场景：需要**任务串行执行**的场景（如日志顺序写入、单任务调度）。
-
-#### ScheduledThreadPool（定时任务线程池）/ SingleThreadScheduledExecutor（单线程定时任务池）
-
-```java
-ExecutorService executor = Executors.newScheduledThreadPool(int corePoolSize);
-ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
-```
-
-特点：
-
-- 支持 定时/周期性任务（如 scheduleAtFixedRate）。
-- 使用 `DelayedWorkQueue`，任务会按延迟时间排序执行。
-
-适用场景：定时任务（如心跳检测）、周期性任务（如数据定时同步）。
-
-#### WorkStealingPool（工作窃取线程池）
-
-```java
-ExecutorService executor = Executors.newWorkStealingPool(int parallelism);
-```
-
-特点：
-    - 使用 `ForkJoinPool` 实现，支持**工作窃取算法**（空闲线程偷其他队列任务）
-    - 默认并行度为 `Runtime.getRuntime().availableProcessors()`。
-
-适用场景：计算密集型任务（如并行流处理、分治算法），能够提高 CPU 利用率，减少线程竞争。
-
-
-|线程池类型|核心线程数|最大线程数|任务队列|适用场景|
-|---|---|---|---|---|
-|FixedThreadPool|固定 (nThreads)|固定 (nThreads)|LinkedBlockingQueue|稳定负载，限制线程数|
-|CachedThreadPool|0|Integer.MAX_VALUE|SynchronousQueue|短时任务，突发流量|
-|SingleThreadExecutor|1|1|LinkedBlockingQueue|单线程顺序执行|
-|ScheduledThreadPool|自定义|Integer.MAX_VALUE|DelayedWorkQueue|定时/周期性任务|
-|SingleThreadScheduledExecutor|1|1|DelayedWorkQueue|单线程定时任务|
-|WorkStealingPool|并行度 (CPU核数)|无上限|工作窃取队列|计算密集型任务（Java 8+）|
-
-#### ForkJoinPool（工作窃取线程池）
-
-`ForkJoinPool`是一种专为分治任务设计的线程池，基于工作窃取算法实现高效并行计算，适合处理递归分解的可并行任务（如大规模数据处理、递归算法等）。
-
-##### 工作窃取算法
-
-- 每个线程维护一个双端队列，优先处理自己队列中的任务
-- 当某个线程的队列为空时，会从其他线程队列的尾部偷取任务执行（减少竞争）
-- 优势：最大化 CPU 利用率，避免线程闲置。
-
-##### 分治任务
-
-- fork()：将任务分解为子任务，并提交给线程池
-- join()：等待子任务完成并获取结果
-
-##### 示例
-
-计算1~n的和
-
-```java
-import java.util.concurrent.*;
-
-class SumTask extends RecursiveTask<Long> {
-    private final long start;
-    private final long end;
-    private static final long THRESHOLD = 10_000; // 阈值：小于此值直接计算
-
-    SumTask(long start, long end) {
-        this.start = start;
-        this.end = end;
-    }
-
-    @Override
-    protected Long compute() {
-        if (end - start <= THRESHOLD) {
-            // 小任务直接计算
-            long sum = 0;
-            for (long i = start; i <= end; i++) sum += i;
-            return sum;
-        } else {
-            // 大任务拆分（分治）
-            long mid = (start + end) / 2;
-            SumTask leftTask = new SumTask(start, mid);
-            SumTask rightTask = new SumTask(mid + 1, end);
-            leftTask.fork(); // 异步执行左子任务
-            return rightTask.compute() + leftTask.join(); // 合并结果
+public class LockDemo {
+    private final Lock lock = new ReentrantLock(); // 默认非公平锁
+    
+    public void doTask() {
+        lock.lock(); // 加锁
+        try {
+            // 临界区代码
+            System.out.println("Lock acquired by " + Thread.currentThread().getName());
+        } finally {
+            lock.unlock(); // 必须在 finally 中解锁，避免死锁
         }
     }
 }
-
-public class Main {
-    public static void main(String[] args) {
-        ForkJoinPool pool = ForkJoinPool.commonPool();
-        SumTask task = new SumTask(1, 1_000_000);
-        long result = pool.invoke(task); // 提交任务并获取结果
-        System.out.println("Sum: " + result); // 输出 500000500000
-    }
-}
 ```
-
-#### 为什么不应该自动创建线程池
-
-虽然通过 Executors 工具类可以快速创建线程池（如 newFixedThreadPool、newCachedThreadPool），但阿里 Java 开发规范等最佳实践明确建议 不要直接使用这些便捷方法，而是应该 手动创建 ThreadPoolExecutor。以下是具体原因和底层逻辑：
-
-- 无界队列导致内存溢出（OOM）
   
-  FixedThreadPool 和 SingleThreadExecutor 默认使用 无界队列，当任务提交速度持续高于处理速度时，队列会无限堆积任务。
+- 需要手动管理锁的获取和释放，使用`lock()`方法获取锁，使用`unlock()`方法释放锁，避免死锁。
+- 一般使用`try-finally`结构来确保锁的释放，即使在临界区代码抛出异常的情况下也能保证锁的正确释放。
 
-- 线程数失控引发资源耗尽
+### 高级控制方法
 
-  CachedThreadPool 和 ScheduledThreadPool 默认使用 SynchronousQueue，当任务数量暴增时，会无限创建线程，导致系统资源（CPU、内存）耗尽。
+1. `tryLock()`
 
-- 无法感知任务执行异常
+   - 作用：尝试非阻塞获取锁，成功返回 true，失败返回 false。
+   - 示例：
+  
+    ```java
+    if (lock.tryLock()) {
+        try {
+            // 获取锁成功，执行临界区代码
+        } finally {
+            lock.unlock();
+        }
+    } else {
+        // 获取锁失败，执行其他逻辑
+    }
+    ```
 
-  Executors 创建的线程池默认不捕获任务抛出的异常，异常信息会丢失。
+2. `tryLock(long timeout, TimeUnit unit)`
 
-- 与监控系统不兼容
+   - 作用：超时等待获取锁，在指定时间内尝试，超时返回 false。
+   - 特点：可响应中断，等待期间调用`interrupt()`方法会抛出`InterruptedException`。
+   - 示例：
 
-    自动化创建的线程池难以集成监控（如线程活跃数、队列大小、任务耗时）。
+    ```java
+    try {
+        if (lock.tryLock(2, TimeUnit.SECONDS)) {  // 最多等待2秒
+            try {
+                // 临界区代码
+            } finally {
+                lock.unlock();
+            }
+        } else {
+            System.out.println("获取锁超时");
+        }
+    } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();  // 恢复中断状态
+    }
+    ```
 
-#### 自定义线程池
+3. `lockInterruptibly()`
+  
+   - 作用：可中断获取锁，如果锁被占用，线程会阻塞但可被其他线程中断。
+   - 适用场景：需要响应中断的长时间任务。
+   - 示例：
+  
+    ```java
+    try {
+        lock.lockInterruptibly();  // 可被中断的阻塞
+        try {
+            // 临界区代码
+        } finally {
+            lock.unlock();
+        }
+    } catch (InterruptedException e) {
+        System.out.println("线程被中断");
+        Thread.currentThread().interrupt();
+    }
+    ```
 
-##### 线程数
+4. `newCondition()`
 
-- CPU 密集型任务
-  - 特点：任务主要消耗 CPU 资源（如数学计算、数据压缩、加密解密）。
-  - 线程数：`线程数 = CPU 核心数 + 1`
-（多 1 个线程避免 CPU 空闲，但实际场景中通常直接等于核心数即可）。
-  - 最多线程数：`maxPoolSize = corePoolSize`（通常不扩展）
-  - 过多的线程会导致频繁的上下文切换，反而降低性能。
-- I/O 密集型任务
-  - 特点：任务频繁等待 I/O（如网络请求、数据库查询、文件读写）。
-  - 线程数：`线程数 = CPU 核心数 * (1 + 平均等待时间 / 平均工作时间)`
-    - 若等待时间远高于计算时间（如 HTTP 请求），可简化为：`线程数 = CPU 核心数 * 2`
-    - 极端情况下（如完全阻塞的任务），可适当调高（如 50~100），但需压测验证。
-  - 最多线程数：`maxPoolSize = corePoolSize * 2`
-  - 在 I/O 等待时，CPU 可以处理其他线程的任务，提高资源利用率。
+   - 作用：创建条件变量（`Condition`），用于更精细的线程等待/唤醒控制
+   - 对比`synchronized`：
+     - `synchronized`只能使用`wait()/notify()`
+     - `Condition`支持多个等待队列（如生产者-消费者模型）
+   - 示例：
 
-##### 任务队列选择
+    ```java
+    Lock lock = new ReentrantLock();
+    Condition notEmpty = lock.newCondition();  // 条件变量
 
-| 队列类型 | 特点 | 适用场景 |
-| --- | --- | --- |
-| `ArrayBlockingQueue` | 有界队列，固定容量，防止OOM | 适用于任务量已知，需要限制任务数 |
-| `LinkedBlockingQueue` | 无界队列（默认`Integer.MAX_VALUE`），可能堆积任务导致OOM | 不推荐生产环境使用 |
-| `SynchronousQueue` | 不存储任务，直接移交线程 | 高吞吐、短任务 |
-| `PriorityBlockingQueue` | 优先级队列 | 需要任务优先级调度 |
-
-##### 拒绝策略
-
-| 策略 | 行为 | 适用场景 |
-| --- | --- | --- |
-| `AbortPolicy` | 抛出异常 | 默认策略，需要快速失败 |
-| `CallerRunsPolicy` | 调用者执行任务 | 保证任务不丢失，但可能阻塞主线程 |
-| `DiscardPolicy` | 静默丢弃新任务 | 允许丢弃不重要任务 |
-| `DiscardOldestPolicy` | 丢弃队列最旧任务，然后重试提交 | 优先处理新任务 |
-
-##### 线程工厂
-
-自定义线程属性（名称、优先级、守护线程等）：
-```java
-ThreadFactory factory = r -> {
-    Thread t = new Thread(r, "service-thread-" + atomicCounter.getAndIncrement());
-    t.setPriority(Thread.NORM_PRIORITY);
-    t.setDaemon(false); // 非守护线程（避免JVM退出时线程被强制终止）
-    return t;
-};
-```
-
-**守护线程（Daemon Thread）** 是 Java 中的一种后台服务线程，它的生命周期依赖于非守护线程（即用户线程）。当所有非守护线程结束时，无论守护线程是否执行完毕，JVM 都会立即退出并终止所有守护线程。守护线程的优先级通常较低，并且不保证finally块中的代码一定会被执行，因此需要避免在守护线程中持有需要释放的资源。
-
-
-##### 扩展功能（钩子方法）
-
-通过继承`ThreadPoolExecutor`添加监控和增强逻辑：
-```java
-class CustomThreadPool extends ThreadPoolExecutor {
-    @Override
-    protected void beforeExecute(Thread t, Runnable r) {
-        super.beforeExecute(t, r);
-        monitor.recordStart(t, r); // 记录任务开始时间
+    // 等待条件
+    lock.lock();
+    try {
+        while (queue.isEmpty()) {
+            notEmpty.await();  // 释放锁并等待
+        }
+        // 条件满足后继续执行
+    } finally {
+        lock.unlock();
     }
 
-    @Override
-    protected void afterExecute(Runnable r, Throwable t) {
-        super.afterExecute(r, t);
-        monitor.recordEnd(r, t); // 记录任务耗时和异常
+    // 唤醒等待线程
+    lock.lock();
+    try {
+        notEmpty.signal();  // 唤醒一个等待线程
+    } finally {
+        lock.unlock();
     }
+    ```
 
-    @Override
-    protected void terminated() {
-        super.terminated();
-        log.info("ThreadPool terminated"); // 线程池关闭时通知
-    }
-}
-```
+### 和synchronized的对比
+
+||`synchronized`（JVM内置）|`Lock`（`ReentrantLock`等）|
+|---|---|---|
+|锁获取|自动加锁/释放（通过代码块或方法）|手动调用 `lock()/unlock()`（需配合 `try-finally`）|
+|锁类型|非公平锁（可升级为公平锁）|可选择公平锁或非公平锁|
+|中断响应|阻塞时无法中断|支持中断（`lockInterruptibly()`）|
+|超时机制|不支持|支持（`tryLock(time,unit)`）|
+|条件变量|仅通过`wait()/notify()`实现|支持多个`Condition`（更灵活的线程通信）|
+
+- 选择`synchronized`：
+  - **简单同步需求**：如单方法内的线程安全控制
+  - **低竞争环境**：如单例模式的双重检查锁
+  - **代码简洁优先**：避免手动管理锁释放
+- 选择`Lock`：
+  - **需要高级功能**：如可中断、超时、公平锁
+  - **复杂同步逻辑**：如跨多个方法的锁控制
+  - **高竞争环境**：如秒杀系统中的库存扣减

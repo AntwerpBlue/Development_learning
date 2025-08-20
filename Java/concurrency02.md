@@ -1,38 +1,40 @@
-### Java 并发编程
+# Java 并发编程
 
-### Lecture 2: 线程的停止
+## Lecture 2: 线程的停止
 
-#### 正确的停止线程
+### 正确的停止线程
 
 1. 使用中断机制（interruption）
-```java
-public class ProperThreadStop implements Runnable {
-    @Override
-    public void run() {
-        while (!Thread.currentThread().isInterrupted()) {
-            try {
-                // 正常工作代码
-                Thread.sleep(1000); // 会响应中断
-            } catch (InterruptedException e) {
-                // 恢复中断状态（重要！）
-                Thread.currentThread().interrupt();
-                // 执行清理工作后退出
-                break;
-            }
-        }
-        System.out.println("线程优雅终止");
-    }
 
-    public static void main(String[] args) throws InterruptedException {
-        Thread thread = new Thread(new ProperThreadStop());
-        thread.start();
-        Thread.sleep(3000);
-        thread.interrupt(); // 请求中断
+    ```java
+    public class ProperThreadStop implements Runnable {
+        @Override
+        public void run() {
+            while (!Thread.currentThread().isInterrupted()) {
+                try {
+                    // 正常工作代码
+                    Thread.sleep(1000); // 会响应中断
+                } catch (InterruptedException e) {
+                    // 恢复中断状态（重要！）
+                    Thread.currentThread().interrupt();
+                    // 执行清理工作后退出
+                    break;
+                }
+            }
+            System.out.println("线程优雅终止");
+        }
+
+        public static void main(String[] args) throws InterruptedException {
+            Thread thread = new Thread(new ProperThreadStop());
+            thread.start();
+            Thread.sleep(3000);
+            thread.interrupt(); // 请求中断
+        }
     }
-}
-```
+    ```
 
 2. 使用Future取消任务（适用于线程池）
+
 ```java
 ExecutorService executor = Executors.newSingleThreadExecutor();
 Future<?> future = executor.submit(() -> {
@@ -45,7 +47,7 @@ Future<?> future = executor.submit(() -> {
 future.cancel(true); // true表示尝试中断线程
 ```
 
-#### 为什么使用volatile关键字是错误的
+### 为什么使用volatile关键字是错误的
 
 ```java
 public class FlawedStop {
@@ -80,7 +82,7 @@ public class FlawedStop {
 - 无法响应系统关闭
   - JVM关闭时，无法通过这种机制通知线程退出
 
-#### 恢复中断
+### 恢复中断
 
 当线程被中断时，如果该线程正处于阻塞状态（如`sleep()`、`wait()`或`join()`），这些阻塞方法会抛出`InterruptedException`，同时清除线程的中断状态（设为`false`）。恢复中断是指在捕获这个异常后，重新设置线程的中断状态。
 
